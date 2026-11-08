@@ -1,11 +1,9 @@
-"""Support for HP iLO sensors via Redfish/HPILO."""
+"""Support for HP iLO sensors."""
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 from typing import Any
 
-import hpilo
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -15,182 +13,216 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
     CONF_NAME,
-    CONF_PASSWORD,
-    CONF_PORT,
-    CONF_USERNAME,
     PERCENTAGE,
     UnitOfTemperature,
     UnitOfTime,
 )
+
+try:  # HA >= 2022.11
+    from homeassistant.const import UnitOfPower as UnitOfElectricPower
+except ImportError:  # pragma: no cover - very old HA
+    from homeassistant.const import UnitOfElectricPower  # type: ignore[no-redef]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, DEFAULT_PORT
+from . import IloDataUpdateCoordinator
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# AANGEPAST: Interval nu op 30 seconden
-SCAN_INTERVAL = timedelta(seconds=30)
+
+def _device_info(entry: ConfigEntry) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
+        name=entry.data.get(CONF_NAME) or entry.title or "HP iLO",
+        manufacturer="Hewlett Packard Enterprise",
+        model="ProLiant (iLO)",
+        configuration_url=f"https://{entry.data[CONF_HOST]}",
+    )
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the HP iLO sensors vanuit een config entry."""
-    
-    coordinator = IloDataUpdateCoordinator(hass, entry)
-    
-    # Eerste refresh bij opstarten
-    await coordinator.async_config_entry_first_refresh()
-
-    device_info = DeviceInfo(
-        identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
-        name=entry.data.get(CONF_NAME, "HP iLO"),
-        manufacturer="Hewlett Packard Enterprise",
-        configuration_url=f"https://{entry.data[CONF_HOST]}",
-    )
+    """Set up the HP iLO sensors from a config entry."""
+    coordinator: IloDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    device_info = _device_info(entry)
+    data = coordinator.data or {}
 
     sensors: list[SensorEntity] = []
-    data = coordinator.data
 
-    # 1. Temperatuur
-    if "temperature" in data:
-        for label, sensor_info in data["temperature"].items():
-            if sensor_info.get("status") != "Not Installed":
-                sensors.append(HpIloTemperatureSensor(coordinator, label, device_info))
+    # 1. Temperature sensors
+    temperatures = data.get("temperature") or {}
+    if isinstance(temperatures, dict):
+        for label, sensor_info in temperatures.items():
+            if isinstance(sensor_info, dict) and sensor_info.get("status") == "Not Installed":
+                continue
+            sensors.append(HpIloTemperatureSensor(coordinator, label, device_info))
 
-    # 2. Fans
-    if "fans" in data:
-        for label, fan_info in data["fans"].items():
+    # 2. Fan sensors
+    fans = data.get("fans") or {}
+    if isinstance(fans, dict):
+        for label in fans:
             sensors.append(HpIloFanSensor(coordinator, label, device_info))
 
-    # 3. Power Status
-    if "power_status" in data:
-        sensors.append(HpIloPowerSensor(coordinator, device_info))
+    # 3. Power status
+    sensors.append(HpIloPowerSensor(coordinator, device_info))
 
-    # 4. Power On Time
-    if "power_on_time" in data:
+    # 4. Power-on time (only if the iLO reported it)
+    if data.get("power_on_time") is not None:
         sensors.append(HpIloPowerOnTimeSensor(coordinator, device_info))
+
+    # 5. Present power usage in Watts
+    sensors.append(HpIloPowerUsageSensor(coordinator, device_info))
 
     async_add_entities(sensors)
 
 
-class IloDataUpdateCoordinator(DataUpdateCoordinator):
-    """Centrale klasse om iLO data elke 30 seconden te verzamelen."""
-
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=f"{DOMAIN}_{entry.data[CONF_HOST]}",
-            update_interval=SCAN_INTERVAL,
-        )
-        self.entry = entry
-
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Haal alle data op in één call."""
-        return await self.hass.async_add_executor_job(self._get_ilo_data)
-
-    def _get_ilo_data(self) -> dict[str, Any]:
-        """Sync verbinding met de iLO library."""
+def _numeric_value(raw: Any) -> float | int | None:
+    """Unpack hpilo (value, unit) tuples to a plain number."""
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)) and raw:
+        raw = raw[0]
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text in ("N/A", "", "Unknown", "UNKNOWN"):
+            return None
         try:
-            ilo = hpilo.Ilo(
-                hostname=self.entry.data[CONF_HOST],
-                login=self.entry.data[CONF_USERNAME],
-                password=self.entry.data[CONF_PASSWORD],
-                port=self.entry.data.get(CONF_PORT, DEFAULT_PORT),
-            )
-            
-            health = ilo.get_embedded_health()
-            
-            return {
-                "temperature": health.get("temperature", {}),
-                "fans": health.get("fans", {}),
-                "power_status": ilo.get_host_power_status(),
-                "power_on_time": ilo.get_server_power_on_time(),
-            }
-        except Exception as err:
-            raise UpdateFailed(f"iLO onbereikbaar: {err}") from err
+            # Handle "65 Watts" style strings.
+            first = text.split()[0].replace(",", ".")
+            number: float = float(first)
+            return int(number) if number.is_integer() else number
+        except (ValueError, IndexError):
+            return None
+    return None
 
 
-class HpIloBaseSensor(CoordinatorEntity, SensorEntity):
-    """Basis voor iLO sensoren."""
-    def __init__(self, coordinator: IloDataUpdateCoordinator, device_info: DeviceInfo):
+class HpIloBaseSensor(CoordinatorEntity[IloDataUpdateCoordinator], SensorEntity):
+    """Base for iLO sensors."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, device_info: DeviceInfo
+    ) -> None:
         super().__init__(coordinator)
         self._attr_device_info = device_info
 
 
 class HpIloTemperatureSensor(HpIloBaseSensor):
-    """Temperatuur sensor."""
-    def __init__(self, coordinator, label, device_info):
+    """Temperature sensor."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, label: str, device_info: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, device_info)
+        safe = str(label).replace(" ", "_")
+        base = device_info.get("name", "HP iLO")
         self._label = label
-        self._attr_name = f"{device_info['name']} Temp {label}"
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_temp_{label.replace(' ', '_')}"
+        self._attr_name = f"{base} Temp {label}"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_temp_{safe}"
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> float | None:
-        temp_data = self.coordinator.data["temperature"].get(self._label)
-        if temp_data:
-            val = temp_data.get("currentreading")
-            return val[0] if isinstance(val, (list, tuple)) else val
-        return None
+        data = (self.coordinator.data or {}).get("temperature", {}) or {}
+        temp_data = data.get(self._label)
+        if not isinstance(temp_data, dict):
+            return None
+        value = _numeric_value(temp_data.get("currentreading"))
+        return float(value) if value is not None else None
 
 
 class HpIloFanSensor(HpIloBaseSensor):
-    """Fan snelheid."""
-    def __init__(self, coordinator, label, device_info):
+    """Fan speed sensor."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, label: str, device_info: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, device_info)
+        safe = str(label).replace(" ", "_")
+        base = device_info.get("name", "HP iLO")
         self._label = label
-        self._attr_name = f"{device_info['name']} Fan {label}"
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_fan_{label.replace(' ', '_')}"
+        self._attr_name = f"{base} Fan {label}"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_fan_{safe}"
         self._attr_native_unit_of_measurement = PERCENTAGE
         self._attr_icon = "mdi:fan"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> int | None:
-        fan_data = self.coordinator.data["fans"].get(self._label)
-        if fan_data:
-            val = fan_data.get("speed")
-            return val[0] if isinstance(val, (list, tuple)) else val
-        return None
+        data = (self.coordinator.data or {}).get("fans", {}) or {}
+        fan_data = data.get(self._label)
+        if not isinstance(fan_data, dict):
+            return None
+        value = _numeric_value(fan_data.get("speed"))
+        return int(value) if value is not None else None
 
 
 class HpIloPowerSensor(HpIloBaseSensor):
-    """Power Status."""
-    def __init__(self, coordinator, device_info):
+    """Power status sensor."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, device_info: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, device_info)
-        self._attr_name = f"{device_info['name']} Power Status"
+        base = device_info.get("name", "HP iLO")
+        self._attr_name = f"{base} Power Status"
         self._attr_unique_id = f"{coordinator.entry.entry_id}_power_status"
         self._attr_device_class = SensorDeviceClass.ENUM
-        self._attr_options = ["ON", "OFF"]
+        self._attr_options = ["ON", "OFF", "UNKNOWN"]
 
     @property
     def native_value(self) -> str:
-        status = self.coordinator.data.get("power_status", "UNKNOWN")
-        return status.upper() if status else "UNKNOWN"
+        status = (self.coordinator.data or {}).get("power_status", "UNKNOWN")
+        text = str(status or "UNKNOWN").upper()
+        return text if text in ("ON", "OFF") else "UNKNOWN"
 
 
 class HpIloPowerOnTimeSensor(HpIloBaseSensor):
-    """Power On Time."""
-    def __init__(self, coordinator, device_info):
+    """Minutes since the server was powered on."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, device_info: DeviceInfo
+    ) -> None:
         super().__init__(coordinator, device_info)
-        self._attr_name = f"{device_info['name']} Power On Time"
+        base = device_info.get("name", "HP iLO")
+        self._attr_name = f"{base} Power On Time"
         self._attr_unique_id = f"{coordinator.entry.entry_id}_power_on_time"
         self._attr_native_unit_of_measurement = UnitOfTime.MINUTES
         self._attr_icon = "mdi:clock-outline"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> int | None:
-        return self.coordinator.data.get("power_on_time")
+        value = _numeric_value((self.coordinator.data or {}).get("power_on_time"))
+        return int(value) if value is not None else None
+
+
+class HpIloPowerUsageSensor(HpIloBaseSensor):
+    """Present power draw in Watts."""
+
+    def __init__(
+        self, coordinator: IloDataUpdateCoordinator, device_info: DeviceInfo
+    ) -> None:
+        super().__init__(coordinator, device_info)
+        base = device_info.get("name", "HP iLO")
+        self._attr_name = f"{base} Power Usage"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_power_usage"
+        self._attr_native_unit_of_measurement = UnitOfElectricPower.WATT
+        self._attr_device_class = SensorDeviceClass.POWER
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> int | None:
+        value = _numeric_value((self.coordinator.data or {}).get("power_usage"))
+        return int(value) if value is not None else None

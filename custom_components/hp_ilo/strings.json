@@ -3,42 +3,46 @@
     "flow_title": "{name}",
     "step": {
       "user": {
-        "title": "Connect to the device",
+        "title": "Connect to HP iLO",
+        "description": "Enter the hostname, port and credentials of your HP iLO interface.",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]"
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "name": "Name"
         }
-      },
-      "auth": {
-        "title": "Authenticate to the device",
-        "data": {
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
-        }
-      },
-      "finish": {
-        "title": "Choose a name for the device",
-        "data": {
-          "name": "[%key:common::config_flow::data::name%]"
-        }
-      },
-      "confirm": {
-        "title": "Confirm adding HP iLO",
-        "description": "You are about to add `{name}` ({description}) at `{host}` to Home Assistant.\n\n **To complete the process, enter your iLO username and password.**"
       }
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "already_in_progress": "[%key:common::config_flow::abort::already_in_progress%]",
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_host": "[%key:common::config_flow::error::invalid_host%]",
+      "already_configured": "Device is already configured",
+      "already_in_progress": "Configuration flow is already in progress",
+      "cannot_connect": "Unable to connect",
+      "invalid_host": "Invalid hostname",
+      "invalid_auth": "Invalid authentication",
       "not_supported": "Device not supported",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "not_redfish_supported": "Device does not support Redfish",
+      "unknown": "Unexpected error"
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_host": "[%key:common::config_flow::error::invalid_host%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "invalid_host": "Invalid hostname",
+      "unknown": "Unexpected error"
+    }
+  },
+  "services": {
+    "power_on": {
+      "description": "Power on the server via iLO."
+    },
+    "reboot_server": {
+      "description": "Perform a warm boot of the server via iLO."
+    },
+    "shutdown_graceful": {
+      "description": "Graceful shutdown via momentary power button press."
+    },
+    "shutdown_hard": {
+      "description": "Forced shutdown via press-and-hold of the power button."
     }
   }
 }

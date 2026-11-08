@@ -1,21 +1,55 @@
-reboot_server:
-  description: "Herstart de server via iLO"
+power_on:
+  description: "Power on the server via iLO."
   fields:
     entry_id:
-      description: "De config entry ID van de iLO (te vinden in de URL van de integratie)"
-      required: true
+      description: "Config entry ID of the iLO (optional when only one is configured)."
+      required: false
+      selector:
+        text:
+    host:
+      description: "iLO hostname/IP (alternative to entry_id)."
+      required: false
       selector:
         text:
 
-shutdown_server:
-  description: "Zet de server uit (Graceful of Hard)"
+reboot_server:
+  description: "Perform a warm boot of the server via iLO."
   fields:
     entry_id:
-      required: true
+      description: "Config entry ID of the iLO (optional when only one is configured)."
+      required: false
       selector:
         text:
-    force:
-      description: "Indien aan, voert een harde shutdown uit (pwr_button). Indien uit, een graceful shutdown."
-      default: false
+    host:
+      description: "iLO hostname/IP (alternative to entry_id)."
+      required: false
       selector:
-        boolean:
+        text:
+
+shutdown_graceful:
+  description: "Graceful shutdown via momentary power button press."
+  fields:
+    entry_id:
+      description: "Config entry ID of the iLO (optional when only one is configured)."
+      required: false
+      selector:
+        text:
+    host:
+      description: "iLO hostname/IP (alternative to entry_id)."
+      required: false
+      selector:
+        text:
+
+shutdown_hard:
+  description: "Forced shutdown via press-and-hold of the power button."
+  fields:
+    entry_id:
+      description: "Config entry ID of the iLO (optional when only one is configured)."
+      required: false
+      selector:
+        text:
+    host:
+      description: "iLO hostname/IP (alternative to entry_id)."
+      required: false
+      selector:
+        text:

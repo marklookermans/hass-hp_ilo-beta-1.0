@@ -1,27 +1,19 @@
 {
   "domain": "hp_ilo",
   "name": "HP Integrated Lights-Out (iLO)",
-  "codeowners": [
-    "@marklookermans"
-  ],
+  "codeowners": ["@marklookermans"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/marklookermans/hass-hp_ilo-beta-fork",
+  "documentation": "https://github.com/marklookermans/hass-hp_ilo-beta-1.0",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/marklookermans/hass-hp_ilo-beta-fork",
-  "loggers": [
-    "custom_components.hp_ilo",
-    "hpilo"
-  ],
-  "requirements": [
-    "python-hpilo==4.4.3",
-    "redfish>=3.0.0"
-  ],
+  "issue_tracker": "https://github.com/marklookermans/hass-hp_ilo-beta-1.0/issues",
+  "loggers": ["custom_components.hp_ilo", "hpilo"],
+  "requirements": ["python-hpilo==4.4.3", "redfish>=3.0.0"],
   "ssdp": [
     {
       "deviceType": "urn:schemas-upnp-org:device:Basic:1",
       "manufacturer": "Hewlett Packard Enterprise"
     }
   ],
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

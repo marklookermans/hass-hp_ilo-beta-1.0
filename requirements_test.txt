@@ -1,1 +1,7 @@
-pytest-homeassistant-custom-component==0.4.0
+homeassistant
+pytest
+pytest-asyncio
+pytest-homeassistant-custom-component
+python-hpilo==4.4.3
+redfish>=3.0.0
+voluptuous
